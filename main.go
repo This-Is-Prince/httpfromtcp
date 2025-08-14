@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -8,49 +9,54 @@ import (
 	"strings"
 )
 
+func getLinesChannel(f io.ReadCloser) <-chan string {
+	lines := make(chan string)
+
+	go func() {
+		defer f.Close()
+		defer close(lines)
+
+		buffer := make([]byte, 8)
+		var s strings.Builder
+
+		for {
+			n, err := f.Read(buffer)
+			if err != nil {
+				if err == io.EOF {
+					s.Write(buffer[:n])
+					break
+				} else {
+					log.Fatal("Error reading file:", err)
+				}
+			}
+
+			chunk := buffer[:n]
+			if idx := bytes.IndexByte(chunk, '\n'); idx != -1 {
+				s.Write(chunk[:idx])
+				chunk = chunk[idx+1:]
+				lines <- s.String()
+				s.Reset()
+			}
+
+			s.Write(chunk)
+		}
+
+		if s.Len() > 0 {
+			lines <- s.String()
+			s.Reset()
+		}
+	}()
+
+	return lines
+}
+
 func main() {
 	file, err := os.Open("./messages.txt")
 	if err != nil {
 		log.Fatal("Error opening file:", err)
 	}
-	defer file.Close()
 
-	buffer := make([]byte, 8)
-	var s strings.Builder
-
-	for {
-		n, err := file.Read(buffer)
-		chunk := buffer[:n]
-		newLineIndex := len(chunk)
-
-		if err != nil {
-			if err == io.EOF {
-				s.Write(chunk)
-				if s.Len() > 0 {
-					fmt.Printf("read: %s\n", s.String())
-					s.Reset()
-				}
-				os.Exit(0)
-			}
-			log.Fatal("Error reading file:", err)
-		}
-
-		for idx, char := range chunk {
-			if char == '\n' {
-				newLineIndex = idx
-				break
-			}
-		}
-
-		s.Write(chunk[:newLineIndex])
-
-		if newLineIndex < len(chunk) {
-			fmt.Printf("read: %s\n", s.String())
-			s.Reset()
-
-			if newLineIndex+1 < len(chunk) {
-				s.Write(chunk[newLineIndex+1:])
-			}
-		}
+	for str := range getLinesChannel(file) {
+		fmt.Printf("read: %s\n", str)
 	}
 }
